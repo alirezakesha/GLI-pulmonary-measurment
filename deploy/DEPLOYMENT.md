@@ -366,9 +366,111 @@ Expected: `{"status":"ok",...}`
 
 ---
 
-## 4. Nginx — HTTPS and routing
+## 4. Nginx — expose the app on the public IP (HTTP, no domain)
 
-### 4.1 Install site config
+Use this when you want **`http://EC2_PUBLIC_IP`** in a browser. Skip HTTPS until you have a domain.
+
+### 4.0 AWS Security group (do this first)
+
+In **EC2 → your instance → Security → Security group → Edit inbound rules**, add:
+
+| Type | Port | Source | Purpose |
+|------|------|--------|---------|
+| SSH | 22 | Your IP | Admin |
+| HTTP | 80 | `0.0.0.0/0` (or your IP only) | Web app |
+
+Port **8000** stays closed — only Nginx on 80 is public.
+
+Find your public IP: EC2 console → instance → **Public IPv4 address** (e.g. `3.15.xxx.xxx`).
+
+### 4.0.1 Prerequisites on the server
+
+```bash
+# API must be running (only on localhost)
+sudo systemctl status gli-pft-api
+curl -s http://127.0.0.1:8000/api/health
+
+# Frontend build must exist
+ls /opt/gli-pft/GLI-pulmonary-measurment/frontend/dist/index.html
+```
+
+If `index.html` is missing, build or upload:
+
+```bash
+cd /opt/gli-pft/GLI-pulmonary-measurment
+./scripts/production-build.sh
+# OR from Mac: rsync -avz frontend/dist/ ubuntu@IP:/opt/gli-pft/GLI-pulmonary-measurment/frontend/dist/
+```
+
+### 4.0.2 Install Nginx (if not installed)
+
+```bash
+sudo apt install -y nginx
+```
+
+### 4.0.3 Enable the IP-only site config
+
+```bash
+sudo cp /opt/gli-pft/GLI-pulmonary-measurment/deploy/nginx-gli-pft-http-ip.conf \
+        /etc/nginx/sites-available/gli-pft
+
+sudo ln -sf /etc/nginx/sites-available/gli-pft /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+What this config does:
+
+| Setting | Meaning |
+|---------|---------|
+| `listen 80` | Public HTTP |
+| `server_name _` | Works when you open the site by IP (no domain name) |
+| `root .../frontend/dist` | Serves the React UI |
+| `location /api/` → `127.0.0.1:8000` | Sends API calls to your running uvicorn |
+
+### 4.0.4 Optional: allow API CORS from your IP URL
+
+```bash
+sudo nano /etc/gli-pft/env
+```
+
+Set (use your real public IP):
+
+```bash
+PYTHONPATH=/opt/gli-pft/GLI-pulmonary-measurment
+ALLOWED_ORIGINS=http://3.15.xxx.xxx
+```
+
+```bash
+sudo systemctl restart gli-pft-api
+```
+
+(Same-origin via Nginx usually works without this; harmless to set.)
+
+### 4.0.5 Test from your laptop browser
+
+1. `http://YOUR_EC2_PUBLIC_IP` → GLI PFT Calculator UI  
+2. `http://YOUR_EC2_PUBLIC_IP/api/health` → `{"status":"ok",...}`  
+
+If the page does not load:
+
+```bash
+# On server — Nginx running?
+sudo systemctl status nginx
+
+# Firewall on Ubuntu (usually inactive on EC2)
+sudo ufw status
+```
+
+When you get a domain later, switch to **`deploy/nginx-gli-pft.conf`** + certbot (§4.1 below).
+
+---
+
+## 4.1 Nginx — HTTPS with a domain (production)
+
+### 4.1.1 Install site config
 
 ```bash
 sudo cp /opt/gli-pft/GLI-pulmonary-measurment/deploy/nginx-gli-pft.conf \
@@ -397,7 +499,7 @@ What the Nginx config does:
 | `try_files ... /index.html` | SPA routing for React |
 | `client_max_body_size 50M` | Allow large PFT Excel uploads |
 
-### 4.2 Enable site and test
+### 4.1.2 Enable site and test
 
 ```bash
 # Activate this site (symlink into sites-enabled)
@@ -413,7 +515,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### 4.3 TLS certificate (Let's Encrypt)
+### 4.1.3 TLS certificate (Let's Encrypt)
 
 ```bash
 # Obtains cert and can patch Nginx config for you
@@ -422,7 +524,7 @@ sudo certbot --nginx -d your-domain.com
 sudo systemctl reload nginx
 ```
 
-### 4.4 Verify in a browser
+### 4.1.4 Verify in a browser
 
 - `https://your-domain.com` → GLI PFT Calculator UI  
 - `https://your-domain.com/api/health` → JSON `{"status":"ok",...}`  
@@ -480,7 +582,8 @@ sudo systemctl reload nginx
 | File | Purpose |
 |------|---------|
 | `deploy/gli-pft-api.service` | systemd template (paths set for `GLI-pulmonary-measurment`) |
-| `deploy/nginx-gli-pft.conf` | Nginx template |
+| `deploy/nginx-gli-pft-http-ip.conf` | Nginx HTTP-only (public IP, no TLS) |
+| `deploy/nginx-gli-pft.conf` | Nginx HTTPS + domain |
 | `deploy/env.example` | Copy to `/etc/gli-pft/env` |
 | `scripts/production-build.sh` | Build `frontend/dist/` |
 
