@@ -285,6 +285,21 @@ Ensure the API is on port **8000** and Vite dev server proxies `/api` (default i
 
 ---
 
+## Production deployment (AWS)
+
+See **[deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md)** for a step-by-step guide to deploy on **AWS EC2** with Nginx, HTTPS, and systemd.
+
+Quick summary:
+
+1. Launch Ubuntu EC2; open ports 22, 80, 443 only.  
+2. Clone app to `/opt/gli-pft`; install `data/reference/*.xlsx`.  
+3. `pip install -r requirements.txt` in `.venv`; `./scripts/production-build.sh`.  
+4. Enable `deploy/gli-pft-api.service` and `deploy/nginx-gli-pft.conf` (with your domain + certbot).  
+
+Set `ALLOWED_ORIGINS` in `/etc/gli-pft/env` (see `deploy/env.example`).
+
+---
+
 ## Disclaimer
 
 This software is intended for **research and educational use**. Results should be verified against official GLI tools and interpreted by qualified clinicians before clinical decision-making. The authors and UHN assume no liability for clinical use of these outputs.

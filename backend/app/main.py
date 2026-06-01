@@ -7,7 +7,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.app.config import PROJECT_ROOT, SAMPLES_DIR
+from backend.app.config import ALLOWED_ORIGINS, PROJECT_ROOT, SAMPLES_DIR
 from backend.app.schemas import (
     BatchCalculateResponse,
     BatchPreviewResponse,
@@ -38,7 +38,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
