@@ -1,19 +1,40 @@
+# =============================================================================
+# systemd unit: GLI PFT FastAPI (uvicorn)
+# =============================================================================
+# Install on server:
+#   sudo cp /opt/gli-pft/GLI-pulmonary-measurment/deploy/gli-pft-api.service \
+#           /etc/systemd/system/gli-pft-api.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now gli-pft-api
+# =============================================================================
+
 [Unit]
+# Human-readable name in `systemctl status`
 Description=GLI PFT Calculator API (FastAPI)
+# Start after network is up
 After=network.target
 
 [Service]
 Type=simple
+# Run as web user (matches common Nginx setup)
 User=www-data
 Group=www-data
-WorkingDirectory=/opt/gli-pft
+
+# Project root — where backend/, gli_*.py, data/ live
+WorkingDirectory=/opt/gli-pft/GLI-pulmonary-measurment
+
+# Load PYTHONPATH, ALLOWED_ORIGINS from /etc/gli-pft/env
+# Leading "-" = do not fail if file is missing
 EnvironmentFile=-/etc/gli-pft/env
-Environment=PYTHONPATH=/opt/gli-pft
-ExecStart=/opt/gli-pft/.venv/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
+Environment=PYTHONPATH=/opt/gli-pft/GLI-pulmonary-measurment
+
+# Start uvicorn from PROJECT venv only (not Anaconda / system Python)
+# --host 127.0.0.1 = not reachable from internet; Nginx proxies /api
+ExecStart=/opt/gli-pft/GLI-pulmonary-measurment/.venv/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
+
 Restart=on-failure
 RestartSec=5
 
-# Hardening (optional)
 NoNewPrivileges=true
 PrivateTmp=true
 

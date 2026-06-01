@@ -287,16 +287,17 @@ Ensure the API is on port **8000** and Vite dev server proxies `/api` (default i
 
 ## Production deployment (AWS)
 
-See **[deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md)** for a step-by-step guide to deploy on **AWS EC2** with Nginx, HTTPS, and systemd.
+See **[deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md)** for a full guide (each command explained).
+
+**Application root on server:** `/opt/gli-pft/GLI-pulmonary-measurment`  
+**API environment file:** `/etc/gli-pft/env` (not the same as the project folder)
 
 Quick summary:
 
-1. Launch Ubuntu EC2; open ports 22, 80, 443 only.  
-2. Clone app to `/opt/gli-pft`; install `data/reference/*.xlsx`.  
-3. `pip install -r requirements.txt` in `.venv`; `./scripts/production-build.sh`.  
-4. Enable `deploy/gli-pft-api.service` and `deploy/nginx-gli-pft.conf` (with your domain + certbot).  
-
-Set `ALLOWED_ORIGINS` in `/etc/gli-pft/env` (see `deploy/env.example`).
+1. Ubuntu EC2; security group: 22, 80, 443 only (not 8000).  
+2. Code at `/opt/gli-pft/GLI-pulmonary-measurment`; GLI Excel in `data/reference/`.  
+3. `.venv` + `pip install -r requirements.txt`; build or rsync `frontend/dist/`.  
+4. `deploy/gli-pft-api.service` + `deploy/nginx-gli-pft.conf` + `certbot`.
 
 ---
 
