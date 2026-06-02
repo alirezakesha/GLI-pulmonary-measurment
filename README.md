@@ -57,8 +57,10 @@ LLN-GLI-Pulmonary/
 │   ├── reference/             # GLI lookup tables (required)
 │   │   ├── spirometry_GLI.xlsx
 │   │   └── TLC_GLI.xlsx
-│   └── samples/               # Example clinic exports
-│       └── BMT PFT 20191101 to 20200315.xlsx
+│   ├── samples/               # Example clinic exports
+│   └── output/                # Notebook / batch exports (gitignored)
+├── notebooks/
+│   └── batch_gli_aggregate.ipynb   # Multi-file Excel → GLI + classification
 └── scripts/
     ├── start-api.sh           # Run API with project venv
     └── run_dev.sh             # Run API + frontend together
@@ -192,6 +194,20 @@ Tab state (upload, mapping, results) is kept when switching between Manual, Batc
 
 ---
 
+## Batch notebook (multiple Excel files)
+
+Process one or many PFT spreadsheets offline; outputs one combined file with GLI predicted / **LLN** / ULN / z-scores and **pattern classification**.
+
+```bash
+pip install jupyter ipykernel   # included in requirements.txt
+export PYTHONPATH=.
+jupyter notebook notebooks/batch_gli_aggregate.ipynb
+```
+
+Edit `INPUT_FILES` in the notebook, run all cells, get `data/output/aggregated_PFT_GLI.xlsx`. Details: [notebooks/README.md](notebooks/README.md).
+
+---
+
 ## Command-line interface
 
 ### Spirometry (GLI-2022)
@@ -208,7 +224,7 @@ python gli_TLC.py --age 40 --height 175 --sex M
 python gli_TLC.py --age 40 --height 175 --sex M --tlc 5.2 --rv 1.8 --rvtlc 0.35
 ```
 
-Run without arguments for interactive prompts. Valid age ranges: spirometry 3–95 years; lung volumes 5–80 years.
+Run without arguments for interactive prompts. Valid age ranges: spirometry 3–95 years; lung volumes 5–80 years. For batch/API, chronological age outside 5–80 is **capped** to that bound for lung-volume GLI only (with a note in `GLI_processing_note`), so TLC/RV columns are still filled.
 
 ---
 

@@ -6,8 +6,7 @@ import type {
   MeasuredValues,
   Module,
 } from '../types'
-
-const API = '/api'
+import { API_BASE as API } from './base'
 
 export async function calculateManual(body: {
   age: number

@@ -22,6 +22,8 @@ from backend.app.schemas import ManualCalculateRequest, ParameterResult
 _RATIO_PARAMS = frozenset({"FEV1FVC", "RVTLC"})
 _SPIRO_PARAMS = ("FEV1", "FVC", "FEV1FVC")
 _LV_PARAMS = tuple(gli_TLC.COEFF.keys())
+_LV_AGE_MIN = 5.0
+_LV_AGE_MAX = 80.0
 
 
 class GliService:
@@ -59,8 +61,9 @@ class GliService:
                 request.age, request.height_cm, request.sex, measured
             )
         if "lung_volumes" in request.modules:
+            ref_age, _ = self._lung_volume_reference_age(request.age)
             lv = self._report_lung_volumes(
-                request.age, request.height_cm, request.sex, measured
+                ref_age, request.height_cm, request.sex, measured
             )
         return spiro, lv
 
@@ -85,11 +88,36 @@ class GliService:
 
         try:
             if "lung_volumes" in modules:
-                lv = self._report_lung_volumes(age, height_cm, sex, measured)
+                ref_age, cap_note = self._lung_volume_reference_age(age)
+                lv = self._report_lung_volumes(ref_age, height_cm, sex, measured)
+                if cap_note:
+                    errors.append(cap_note)
         except Exception as exc:
             errors.append(f"Lung volumes: {exc}")
 
         return spiro, lv, errors
+
+    @staticmethod
+    def _lung_volume_reference_age(age: float) -> tuple[float, Optional[str]]:
+        """
+        GLI-2021 lung volumes are defined for ages 5–80.
+
+        Chronological age above 80 (or below 5) is capped so reference values
+        are still computed; a note is returned for GLI_processing_note.
+        """
+        if age > _LV_AGE_MAX:
+            return (
+                _LV_AGE_MAX,
+                f"Lung volumes: chronological age {age:.1f} capped at {_LV_AGE_MAX:.0f} "
+                f"years for GLI-2021 reference (published equation limit).",
+            )
+        if age < _LV_AGE_MIN:
+            return (
+                _LV_AGE_MIN,
+                f"Lung volumes: chronological age {age:.1f} capped at {_LV_AGE_MIN:.0f} "
+                f"years for GLI-2021 reference (published equation limit).",
+            )
+        return age, None
 
     def _report_spirometry(
         self, age: float, height_cm: float, sex: str, measured: dict

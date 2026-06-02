@@ -1,4 +1,5 @@
 import type { ColumnMapping, FieldDefinition } from '../types'
+import { API_BASE } from '../api/base'
 
 interface Props {
   fields: FieldDefinition[]
@@ -22,7 +23,7 @@ export function ColumnMapper({ fields, columns, mapping, onChange }: Props) {
 
   const applyBmtDefaults = async () => {
     try {
-      const res = await fetch('/api/schema/default-mapping')
+      const res = await fetch(`${API_BASE}/schema/default-mapping`)
       const data = await res.json()
       onChange(data.mapping)
     } catch {

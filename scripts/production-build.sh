@@ -23,5 +23,10 @@ if [[ -f package-lock.json ]]; then
 else
   npm install
 fi
+
+# Optional: serve under a subpath (e.g. www.example.com/gli/)
+# Usage: VITE_BASE_PATH=/gli/ ./scripts/production-build.sh
+export VITE_BASE_PATH="${VITE_BASE_PATH:-/}"
+echo "Building with VITE_BASE_PATH=${VITE_BASE_PATH}"
 npm run build
 echo "Built: $ROOT/frontend/dist"

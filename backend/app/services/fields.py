@@ -1,6 +1,41 @@
 """Field definitions and default column mapping for PFT Excel imports."""
 
+import re
+
 from backend.app.schemas import ColumnMapping, FieldDefinition
+
+# Canonical column written on every batch / aggregate export
+CANONICAL_PATIENT_ID_COLUMN = "GLI_patient_id"
+CANONICAL_PATIENT_ID_SOURCE_COLUMN = "GLI_patient_id_source"
+
+# Exact header matches (case-insensitive); first match wins
+PATIENT_ID_ALIASES: tuple[str, ...] = (
+    "PATIENT ID",
+    "PATIENT Health Num",
+    "Patient Health Num",
+    "PATIENT HEALTH NUM",
+    "Patient Health Number",
+    "PATIENT NUMBER",
+    "Patient ID",
+    "Patient Id",
+    "PID",
+    "Pt ID",
+    "PT ID",
+    "FOT ID",
+    "FOT-ID",
+    "FOT Id",
+    "FOTID",
+    "Subject ID",
+    "STUDY ID",
+    "Participant ID",
+    "MRN",
+    "Medical Record Number",
+    "Hospital Number",
+    "Health Number",
+    "UHN",
+    "EMR ID",
+    "EMRID",
+)
 
 FIELD_DEFINITIONS: list[FieldDefinition] = [
     FieldDefinition(
@@ -84,6 +119,124 @@ BMT_DEFAULT_MAPPING = ColumnMapping(
 )
 
 
+def _normalize_column_label(name: str) -> str:
+    """Lowercase label with punctuation collapsed to spaces."""
+    s = re.sub(r"[^a-z0-9]+", " ", str(name).lower().strip())
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _patient_id_column_score(normalized: str) -> int:
+    """Higher score = more likely a patient identifier column (not sex/DOB/etc.)."""
+    if not normalized:
+        return 0
+
+    for block in (
+        "sex",
+        "gender",
+        "dob",
+        "date of birth",
+        "birth date",
+        "height",
+        "weight",
+        "age",
+        "name",
+        "address",
+        "phone",
+        "email",
+        "race",
+        "ethnicity",
+        "diagnosis",
+        "note",
+    ):
+        if block in normalized:
+            return 0
+
+    high_phrases = (
+        "patient health num",
+        "patient health number",
+        "patient id",
+        "patient number",
+        "pat health num",
+        "health num",
+        "fot id",
+        "fotid",
+        "subject id",
+        "study id",
+        "participant id",
+        "medical record",
+        "hospital number",
+        "health number",
+        "emr id",
+    )
+    for phrase in high_phrases:
+        if phrase in normalized:
+            return 100
+
+    if normalized in ("pid", "pt id", "mrn", "fot id"):
+        return 95
+
+    if "patient" in normalized and any(
+        token in normalized for token in ("id", "num", "number", "no", "identifier", "code")
+    ):
+        return 85
+
+    if normalized.endswith(" id") or normalized.endswith(" num"):
+        return 75
+
+    return 0
+
+
+def resolve_patient_id_column(columns: list[str]) -> str | None:
+    """
+    Pick the best Excel column for patient identifier in this file.
+
+    Used per file during batch aggregate so PATIENT ID / Patient Health Num /
+    PID / FOT-ID etc. map to one logical field.
+    """
+    col_list = [str(c) for c in columns]
+    col_set = set(col_list)
+
+    default = BMT_DEFAULT_MAPPING.patient_id
+    if default and default in col_set:
+        return default
+
+    lower_to_orig = {c.lower().strip(): c for c in col_list}
+    for alias in PATIENT_ID_ALIASES:
+        key = alias.lower().strip()
+        if key in lower_to_orig:
+            return lower_to_orig[key]
+
+    best_col: str | None = None
+    best_score = 0
+    for col in col_list:
+        score = _patient_id_column_score(_normalize_column_label(col))
+        if score > best_score:
+            best_score = score
+            best_col = col
+
+    if best_score >= 75:
+        return best_col
+    return None
+
+
+def format_patient_id(value: object) -> str | None:
+    """Normalize ID values for consistent CSV (strings, no float artifacts)."""
+    if value is None:
+        return None
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    if isinstance(value, float) and value == int(value):
+        return str(int(value))
+    text = str(value).strip()
+    return text or None
+
+
 def suggest_mapping(columns: list[str]) -> ColumnMapping:
     """Suggest column mapping by matching known BMT headers or fuzzy labels."""
     col_set = set(columns)
@@ -94,6 +247,9 @@ def suggest_mapping(columns: list[str]) -> ColumnMapping:
             suggested[key] = default_col
         else:
             suggested[key] = None
+
+    if not suggested.get("patient_id"):
+        suggested["patient_id"] = resolve_patient_id_column(columns)
 
     # Fuzzy fallbacks for common alternate headers
     lower_map = {c.lower(): c for c in columns}
