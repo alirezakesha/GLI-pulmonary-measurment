@@ -34,3 +34,12 @@ Each row keeps original columns plus:
 - `GLI_*` (predicted, LLN, ULN, z, status) and `GLI_PFT_Pattern` (Normal / Obstruction / Restriction / Mixed)
 
 For analysis across many exports, use **`GLI_patient_id`** instead of the various raw ID column names.
+
+### Column mapping across different Excel layouts
+
+With **`AUTO_MAPPING_PER_FILE = True`** (default in the notebook), each file gets its own mapping via `suggest_mapping()`. Supported styles include:
+
+- **BMT / Jaeger-style** paths, e.g. `Spirometry->FVC;PRE;TESTSELECT;VALUE`
+- **Manual extraction sheets** (e.g. AGT), e.g. `ID`, `Pre FEV1`, `Pre FVC`, `Pre FEV1/FVC`, `Pre TLC` — not Jaeger paths; `%Pre FEV1` percent columns are ignored
+
+Pre-bronch (**PRE**) measured values are preferred over post when both exist. Run the **Preview mapping** section — it shows the first file plus the first manual-extraction file when your folder has mixed layouts.

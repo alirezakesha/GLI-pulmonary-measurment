@@ -35,6 +35,7 @@ PATIENT_ID_ALIASES: tuple[str, ...] = (
     "UHN",
     "EMR ID",
     "EMRID",
+    "ID",
 )
 
 FIELD_DEFINITIONS: list[FieldDefinition] = [
@@ -172,7 +173,7 @@ def _patient_id_column_score(normalized: str) -> int:
         if phrase in normalized:
             return 100
 
-    if normalized in ("pid", "pt id", "mrn", "fot id"):
+    if normalized in ("pid", "pt id", "mrn", "fot id", "id"):
         return 95
 
     if "patient" in normalized and any(
@@ -237,11 +238,220 @@ def format_patient_id(value: object) -> str | None:
     return text or None
 
 
+# Internal keys for measured PFT parameters (batch column mapping)
+_MEASURE_FIELD_KEYS: tuple[str, ...] = (
+    "FEV1",
+    "FVC",
+    "FEV1FVC",
+    "TLC",
+    "FRC",
+    "RV",
+    "RVTLC",
+    "ERV",
+    "IC",
+    "VC",
+)
+
+# BMT/Jaeger path-style headers — must match the parameter segment, not substrings (e.g. FVC in FEV1/FVC)
+_BMT_RAW_PATTERNS: dict[str, re.Pattern[str]] = {
+    "FEV1": re.compile(r"spirometry\s*->\s*fev\s*1\s*;", re.IGNORECASE),
+    "FVC": re.compile(r"spirometry\s*->\s*fvc\s*;", re.IGNORECASE),
+    "FEV1FVC": re.compile(r"spirometry\s*->\s*fev\s*1\s*/\s*fvc", re.IGNORECASE),
+    "TLC": re.compile(r"tlc\s+body\s*->\s*tlc\s*;", re.IGNORECASE),
+    "FRC": re.compile(r"tlc\s+body\s*->\s*frc\s*;", re.IGNORECASE),
+    "RV": re.compile(r"tlc\s+body\s*->\s*rv\s*;", re.IGNORECASE),
+    "RVTLC": re.compile(r"tlc\s+body\s*->\s*rv\s*/\s*tlc", re.IGNORECASE),
+    "ERV": re.compile(r"svc\s*->\s*erv\s*;", re.IGNORECASE),
+    "IC": re.compile(r"svc\s*->\s*ic\s*;", re.IGNORECASE),
+    "VC": re.compile(r"svc\s*->\s*svc\s*;", re.IGNORECASE),
+}
+
+# Manual extraction workbooks (e.g. AGT): measured pre-bronch columns by normalized header
+_MANUAL_PRE_MEASURES: dict[str, tuple[str, ...]] = {
+    "FEV1": ("pre fev1",),
+    "FVC": ("pre fvc",),
+    "FEV1FVC": ("pre fev1 fvc",),
+    "TLC": ("pre tlc",),
+    "RV": ("pre rv",),
+    "RVTLC": ("pre rv tlc",),
+    "IC": ("pre ic pl",),
+    "VC": ("pre vc pl",),
+}
+
+_MANUAL_PRE_DEMOGRAPHICS: dict[str, tuple[str, ...]] = {
+    "sex": ("sex",),
+    "age": ("age",),
+    "dob": ("dob",),
+    "test_date": ("test date",),
+    "height_cm": ("height",),
+    "patient_id": ("id",),
+}
+
+# Plain headers: "Pre FVC", "FEV1 (Pre)", "TLC pre-bronch", etc.
+_PLAIN_PARAM_PATTERNS: dict[str, re.Pattern[str]] = {
+    "FEV1": re.compile(r"\bfev\s*1\b(?!\s*[/]\s*fvc)"),
+    "FVC": re.compile(r"(?<![\w/])fvc\b(?!\s*[/])"),
+    "FEV1FVC": re.compile(r"\bfev\s*1\s*[/]\s*fvc\b|\bfev\s*1\s*fvc\b|\bfev1fvc\b"),
+    "TLC": re.compile(r"\btlc\b(?!\s*[/])"),
+    "FRC": re.compile(r"\bfrc\b"),
+    "RV": re.compile(r"\brv\b(?!\s*[/])"),
+    "RVTLC": re.compile(r"\brv\s*[/]\s*tlc\b|\brv\s*tlc\b"),
+    "ERV": re.compile(r"\berv\b"),
+    "IC": re.compile(r"\bic\b(?!\s*[/])"),
+    "VC": re.compile(r"\bvc\b|\bsvc\b"),
+}
+
+
+def _column_looks_like_percent_or_derived(raw: str, normalized: str) -> bool:
+    """Skip % predicted, delta, norm-only columns when picking measured values."""
+    raw_l = raw.lower()
+    if raw_l.startswith("%") or raw_l.startswith("percent "):
+        return True
+    if any(
+        token in raw_l
+        for token in (
+            "%norm",
+            "%pre",
+            "deltapc",
+            "delta",
+            ";norm",
+            "% pred",
+            "percent",
+            "pct ",
+            " %",
+        )
+    ):
+        return True
+    if normalized.endswith(" pc") or " percent" in normalized:
+        return True
+    return False
+
+
+def _measure_column_score(field_key: str, column: str) -> int:
+    """
+    Score how well an Excel column matches a GLI measure field.
+    Higher = better. 0 = no match.
+    """
+    raw = str(column)
+    norm = _normalize_column_label(raw)
+    if not norm:
+        return 0
+
+    if _column_looks_like_percent_or_derived(raw, norm):
+        return 0
+
+    score = 0
+
+    raw_l = raw.lower()
+    bmt_pat = _BMT_RAW_PATTERNS.get(field_key)
+    if bmt_pat and bmt_pat.search(raw):
+        score = max(score, 85)
+
+    pattern = _PLAIN_PARAM_PATTERNS.get(field_key)
+    if pattern and pattern.search(norm):
+        score = max(score, 70)
+
+    if score == 0:
+        return 0
+
+    # Prefer pre-bronch / pre-test measured values (aligns with BMT PRE;TESTSELECT;VALUE)
+    if re.search(r"\bpre\b", norm) or ";pre;" in raw_l:
+        score += 35
+    if re.search(r"\bpost\b", norm) or "postsel" in raw_l or ";post" in raw_l:
+        score -= 40
+
+    # Prefer actual measured value columns
+    if "value" in raw_l or norm.endswith(" value") or norm in ("fev1", "fvc", "tlc"):
+        score += 25
+    if "testselect" in raw_l or "testmean" in raw_l:
+        score += 15
+
+    # Penalize wrong parameter (e.g. FEV1 column when we want FVC only)
+    if field_key == "FVC" and re.search(r"\bfev\s*1\s*[/]\s*fvc\b", norm):
+        return 0
+    if field_key == "FEV1" and re.search(r"\bfev\s*1\s*[/]\s*fvc\b", norm):
+        return 0
+    if field_key == "TLC" and re.search(r"\brv\s*[/]\s*tlc\b", norm):
+        return 0
+    if field_key == "RV" and re.search(r"\brv\s*[/]\s*tlc\b", norm):
+        return 0
+
+    # Shorter plain labels ("Pre FVC") beat long BMT paths when both match
+    if score >= 70 and len(norm) <= 24:
+        score += 10
+
+    return score
+
+
+def _norm_column_lookup(columns: list[str]) -> dict[str, str]:
+    """Map normalized header → original Excel column name (first measured-value column wins)."""
+    out: dict[str, str] = {}
+    for col in columns:
+        raw = str(col)
+        norm = _normalize_column_label(raw)
+        if not norm or _column_looks_like_percent_or_derived(raw, norm):
+            continue
+        if norm.startswith("ref "):
+            continue
+        if norm not in out:
+            out[norm] = raw
+    return out
+
+
+def is_manual_pre_export(columns: list[str]) -> bool:
+    """
+    Workbooks with separate Pre FEV1 / Pre FVC / … columns (manual extraction layout).
+    Example: data/all/AGT/AGT PFT manual extraction until Mar 2020.xlsx
+    """
+    norms = {_normalize_column_label(c) for c in columns}
+    return "pre fev1" in norms and "pre fvc" in norms
+
+
+def suggest_mapping_manual_pre(columns: list[str]) -> ColumnMapping:
+    """Exact normalized-header mapping for manual Pre* PFT extraction sheets."""
+    by_norm = _norm_column_lookup(columns)
+
+    def pick(field: str, *norm_names: str) -> str | None:
+        for name in norm_names:
+            if name in by_norm:
+                return by_norm[name]
+        return None
+
+    suggested: dict[str, str | None] = {}
+    for field, norm_names in _MANUAL_PRE_DEMOGRAPHICS.items():
+        suggested[field] = pick(field, *norm_names)
+    if not suggested.get("patient_id"):
+        suggested["patient_id"] = resolve_patient_id_column(columns)
+
+    for field, norm_names in _MANUAL_PRE_MEASURES.items():
+        suggested[field] = pick(field, *norm_names)
+
+    return ColumnMapping(**suggested)
+
+
+def resolve_measure_column(field_key: str, columns: list[str]) -> str | None:
+    """Best Excel column for one measured parameter (per-file auto mapping)."""
+    best_col: str | None = None
+    best_score = 0
+    for col in columns:
+        s = _measure_column_score(field_key, col)
+        if s > best_score:
+            best_score = s
+            best_col = str(col)
+    if best_score >= 60:
+        return best_col
+    return None
+
+
 def suggest_mapping(columns: list[str]) -> ColumnMapping:
     """Suggest column mapping by matching known BMT headers or fuzzy labels."""
-    col_set = set(columns)
+    col_list = [str(c) for c in columns]
+    if is_manual_pre_export(col_list):
+        return suggest_mapping_manual_pre(col_list)
+
+    col_set = set(col_list)
     mapping_dict = BMT_DEFAULT_MAPPING.model_dump()
-    suggested = {}
+    suggested: dict[str, str | None] = {}
     for key, default_col in mapping_dict.items():
         if default_col and default_col in col_set:
             suggested[key] = default_col
@@ -249,16 +459,26 @@ def suggest_mapping(columns: list[str]) -> ColumnMapping:
             suggested[key] = None
 
     if not suggested.get("patient_id"):
-        suggested["patient_id"] = resolve_patient_id_column(columns)
+        suggested["patient_id"] = resolve_patient_id_column(col_list)
 
-    # Fuzzy fallbacks for common alternate headers
-    lower_map = {c.lower(): c for c in columns}
+    # Measured parameters: BMT exact match, else scored match ("Pre FVC", partial BMT paths, …)
+    for field_key in _MEASURE_FIELD_KEYS:
+        if suggested.get(field_key):
+            continue
+        suggested[field_key] = resolve_measure_column(field_key, col_list)
+
+    # Demographics fuzzy fallbacks
+    lower_map = {c.lower(): c for c in col_list}
     aliases = {
         "sex": ["sex", "gender", "patient sex"],
         "height_cm": ["height", "test height", "height (cm)"],
         "age": ["age", "age (years)"],
-        "FEV1": ["fev1", "fev1 (l)"],
-        "FVC": ["fvc", "fvc (l)"],
+        "dob": ["dob", "date of birth", "patient dob", "birth date"],
+        "test_date": ["test date", "date", "pft date", "study date"],
+        "FEV1": ["fev1", "fev1 (l)", "pre fev1", "fev1 pre"],
+        "FVC": ["fvc", "fvc (l)", "pre fvc", "fvc pre"],
+        "FEV1FVC": ["fev1/fvc", "fev1 fvc", "pre fev1/fvc", "fev1/fvc pre"],
+        "TLC": ["tlc", "tlc (l)", "pre tlc", "tlc pre"],
     }
     for field, names in aliases.items():
         if suggested.get(field):
